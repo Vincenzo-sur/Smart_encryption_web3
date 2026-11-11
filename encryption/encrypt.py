@@ -1,16 +1,17 @@
 """
-AES-256-GCM Encryption Module
+Chaotic Tent Map Encryption Module
 
-Performs authenticated symmetric encryption on raw image bytes.
-Generates a fresh 96-bit (12-byte) initialization vector (nonce) for every encryption,
-guaranteeing confidentiality, integrity, and authenticity.
+Performs authenticated symmetric encryption on raw image bytes using chaotic systems.
+Implements 3-stage pipeline: Sine Map Permutation → Prime Circulant Substitution → Tent Map Diffusion.
+Generates deterministic nonce and authentication tag from key for reproducibility.
+
+Maintains API compatibility with previous AES-256-GCM implementation.
 """
 
-import os
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Tuple, Union
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from typing import Dict, Any, Optional, Union
+from encryption.chaotic_image_encryption import ChaoticImageEncryption
 
 
 class EncryptionError(Exception):
@@ -21,7 +22,7 @@ class EncryptionError(Exception):
 @dataclass(frozen=True)
 class EncryptionResult:
     """
-    Immutable container for AES-GCM encryption outputs.
+    Immutable container for Chaotic encryption outputs.
     Allows tuple unpacking: `ciphertext, metadata = result`.
     """
     ciphertext: bytes
@@ -32,7 +33,7 @@ class EncryptionResult:
     def to_metadata(self) -> Dict[str, Any]:
         """Serializes cryptographic metadata to dictionary with hexadecimal fields."""
         return {
-            "algorithm": "AES-256-GCM",
+            "algorithm": "Chaotic-Tent-Map",
             "nonce": self.nonce.hex(),
             "tag": self.tag.hex(),
             "key_id": self.key_id,
@@ -52,12 +53,14 @@ def encrypt_image(
     key_id: Optional[str] = None
 ) -> EncryptionResult:
     """
-    Encrypts raw image bytes using AES-256-GCM.
+    Encrypts raw image bytes using Chaotic Tent Map encryption.
+
+    Pipeline: Sine Map Permutation → Prime Circulant Substitution → Tent Map Diffusion
 
     Args:
-        image_bytes (Union[bytes, bytearray]): Raw binary image data.
+        image_bytes (Union[bytes, bytearray]): Raw binary image data (PNG, JPG, etc.).
         key (bytes): 32-byte (256-bit) symmetric key.
-        associated_data (Optional[bytes]): Optional unencrypted data authenticated with the tag.
+        associated_data (Optional[bytes]): Optional unencrypted data (not used in chaotic encryption).
         key_id (Optional[str]): Optional key identifier or session identifier.
 
     Returns:
@@ -70,32 +73,29 @@ def encrypt_image(
     """
     if not isinstance(image_bytes, (bytes, bytearray)):
         raise TypeError(f"image_bytes must be bytes or bytearray, got {type(image_bytes).__name__}")
-    
+
     if len(image_bytes) == 0:
         raise ValueError("image_bytes cannot be empty")
-        
+
     if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
-        raise ValueError(f"AES-256-GCM key must be exactly 32 bytes (got {len(key) if isinstance(key, (bytes, bytearray)) else 'non-bytes'})")
+        raise ValueError(f"Chaotic encryption key must be exactly 32 bytes (got {len(key) if isinstance(key, (bytes, bytearray)) else 'non-bytes'})")
 
     try:
-        # 96-bit (12-byte) nonce strictly generated per NIST SP 800-38D recommendations
-        nonce = os.urandom(12)
-        aesgcm = AESGCM(key)
-        
-        # AESGCM.encrypt returns ciphertext with appended 16-byte authentication tag
-        encrypted_payload = aesgcm.encrypt(nonce, bytes(image_bytes), associated_data)
-        
-        # Separate ciphertext and 16-byte tag for explicit storage and transport
-        tag = encrypted_payload[-16:]
-        ciphertext = encrypted_payload[:-16]
-        
+        # Initialize chaotic encryption pipeline
+        cipher = ChaoticImageEncryption(key)
+
+        # Encrypt using chaotic pipeline
+        ciphertext, nonce, tag = cipher.encrypt(bytes(image_bytes))
+
         assigned_key_id = key_id or str(uuid.uuid4())
-        
+
         return EncryptionResult(
             ciphertext=ciphertext,
             nonce=nonce,
             tag=tag,
             key_id=assigned_key_id
         )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     except Exception as exc:
         raise EncryptionError(f"Encryption execution failed: {exc}") from exc
