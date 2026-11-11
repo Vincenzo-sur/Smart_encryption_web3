@@ -11,17 +11,19 @@
 **Subsystems**: `encryption/`, `hashing/`  
 
 ### Current Feature Overview
-1. **AES-256-GCM Symmetric Cipher Engine**:
-   - Implements authenticated encryption with associated data (AEAD) over raw image bytes.
-   - Generates a cryptographically strong 256-bit symmetric key (`os.urandom(32)`) ensuring 128-bit quantum security margin against brute force.
-   - Enforces a unique 96-bit (12-byte) initialization vector (nonce) for every individual encryption operation.
-   - Computes a 128-bit (16-byte) authentication tag. Tampering with even a single bit of ciphertext or metadata triggers an uncatchable `InvalidTag` rejection, guaranteeing data authenticity and integrity.
-   - Converts image streams safely to and from bytes without compression loss or dimension distortion.
+1. **Multi-Mode Authenticated Cipher Engine (`AES-256-GCM`, `Chaotic-Tent-Map`, `Hybrid-Chaotic-AES`)**:
+   - Retains OpenSSL-backed `AES-256-GCM` as the default FIPS-compliant AEAD cipher.
+   - Integrates a hardened 3-stage chaotic cipher (`SineMapPermutation` -> `PrimeCirculantSubstitution` -> `TentMapDiffusion`) with bounded chaotic parameters ($\mu \in [0.87, 0.999]$), non-collapsing 256-lane Skewed Tent Map keystream generation, bidirectional avalanche chaining, and Encrypt-then-MAC HMAC-SHA256 authentication.
+   - Exposes `Hybrid-Chaotic-AES` combining chaotic pixel/byte confusion-diffusion with AES-256-GCM outer AEAD protection.
+   - Operates directly on raw byte streams with fresh `os.urandom(12)` nonces and `hmac.compare_digest` tag verification, guaranteeing exact bit-for-bit recovery across PNG, RGBA, JPEG, and WebP images.
 2. **SHA-256 Cryptographic Digest Engine**:
    - Computes deterministic 256-bit content digests over encrypted payloads.
    - Outputs both lowercase hexadecimal format (for UI/API representation) and 32-byte binary format (`bytes32`) for direct Ethereum smart contract mapping.
 
 ### Date-Stamped Changelog & Technical Updates
+#### 2026-11-11 (Multi-Cipher Hardening & Chaotic Tent Map Integration)
+- **Chaotic Pipeline Hardening (`encryption/sine_map_permutation.py`, `prime_circulant_substitution.py`, `tent_map_diffusion.py`, `chaotic_image_encryption.py`)**: Integrated and hardened the 3-stage chaotic pipeline—eliminating IEEE-754 Tent Map keystream collapse via 256-lane skewed iteration, constraining Sine Map $\mu$ to $[0.87, 0.999]$, enforcing fresh 12-byte CSPRNG nonces with HMAC-SHA256 domain-separated subkeys, binding `associated_data` into constant-time MAC verification, and switching from lossy Pillow re-encoding to exact raw-byte processing.
+- **Unified Multi-Algorithm Dispatch (`encryption/encrypt.py`, `decrypt.py`)**: Added optional `algorithm` parameter (`AES-256-GCM`, `Chaotic-Tent-Map`, `Hybrid-Chaotic-AES`) with metadata-driven decryption dispatch.
 #### 2026-11-09 (Day 1 Foundation)
 - **Key Manager (`encryption/key_manager.py`)**: Built CSPRNG key generator `generate_encryption_key()` producing 32-byte entropy pools.
 - **Encryptor (`encryption/encrypt.py`)**: Implemented `encrypt_image()` using cryptography's `AESGCM` primitive with fresh 12-byte nonces per execution. Defined immutable `EncryptionResult` dataclass with hex serialization.
@@ -117,6 +119,9 @@
      - *Access Delegation*: Interface for owners to grant/revoke permissions for external Ethereum addresses.
 
 ### Date-Stamped Changelog & Technical Updates
+#### 2026-11-11 (Multi-Cipher API & UI Selection)
+- **API Algorithm Support (`backend/schemas/image_schemas.py`, `backend/routes/image_routes.py`)**: Added optional `algorithm` selection on `POST /upload` (`AES-256-GCM`, `Chaotic-Tent-Map`, `Hybrid-Chaotic-AES`) and automatic/explicit algorithm resolution on `POST /images/{image_id}/decrypt`.
+- **Streamlit Dashboard (`frontend/app.py`)**: Added interactive algorithm selectors in both the Upload & Encrypt and Verify & Decrypt tabs.
 #### 2026-11-09 (Day 1 Foundation)
 - **FastAPI Core (`backend/main.py`)**: Bootstrapped API server with health monitoring and route mounting.
 - **Pydantic Schemas (`backend/schemas/image_schemas.py`)**: Defined request and response data contracts.
@@ -130,18 +135,22 @@
 **Subsystems**: `evaluation/`, `tests/`  
 
 ### Current Feature Overview
-1. **Cryptographic & Statistical Metrics Skeletons (`evaluation/`)**:
+1. **Cryptographic & Statistical Metrics Suite (`evaluation/`)**:
    - Shannon Entropy analysis (`entropy.py`).
    - Number of Pixels Change Rate (NPCR) (`npcr.py`).
    - Unified Average Changing Intensity (UACI) (`uaci.py`).
-   - Gray-level histogram distribution analysis (`histogram.py`).
+   - Histogram frequency, variance, and chi-square uniformity analysis (`histogram.py`).
    - Correlation coefficient of adjacent pixels (`correlation.py`).
    - Execution performance benchmarks (`performance.py`).
+   - Key sensitivity, PSNR, and comparative multi-cipher benchmarking (`chaotic_encryption_metrics.py`).
 2. **Comprehensive Pytest Suite (`tests/`)**:
-   - Unit tests covering encryption, decryption, tampering detection, and SHA-256 hashing.
-   - Integration tests covering blockchain interaction and API schemas.
+   - Unit tests covering AES-256-GCM, Chaotic-Tent-Map, Hybrid-Chaotic-AES, strict nonce uniqueness, tampering detection, format preservation, and SHA-256 hashing.
+   - Integration tests covering EIP-191 signatures, blockchain contracts, and FastAPI multi-cipher endpoints.
 
 ### Date-Stamped Changelog & Technical Updates
+#### 2026-11-11 (Comparative Evaluation & Multi-Cipher Verification)
+- **Unified Evaluation Suite (`evaluation/histogram.py`, `chaotic_encryption_metrics.py`)**: Extended histogram analysis with chi-square uniformity metrics and consolidated key sensitivity, PSNR, and comparative cipher benchmarking over shared `evaluation/` primitives.
+- **Expanded Pytest Coverage (`tests/test_encryption.py`, `tests/test_chaotic_encryption.py`)**: Enforced strict per-encryption nonce uniqueness across all ciphers, verified lossless recovery across PNG/RGBA/JPEG and >64KB Tent Map keystreams, validated `associated_data` authentication, and added end-to-end API multi-cipher tests.
 #### 2026-11-09 (Day 1 Foundation)
 - **Unit Tests (`tests/test_encryption.py`, `tests/test_hashing.py`)**: Built tests for AES-256-GCM and SHA-256.
 - **Contract Tests (`tests/test_blockchain.py`)**: Built tests validating smart contract compilation and record structures.

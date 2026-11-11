@@ -1,33 +1,33 @@
 """
 Chaotic Image Encryption Orchestrator
 
-Main encryption pipeline combining:
-1. Sine Map Permutation (spatial diffusion)
-2. Prime Circulant Substitution (value transformation)
-3. Tent Map Diffusion (chaos-based XOR diffusion)
+Implements a lossless, authenticated 3-stage chaotic encryption pipeline:
+1. Sine Map Permutation        (spatial/byte diffusion)
+2. Prime Circulant Substitution (non-linear S-box confusion)
+3. Tent Map Diffusion          (bidirectional chaotic avalanche)
 
-This orchestrator converts image bytes to pixel arrays, applies the three-stage
-pipeline, and returns encrypted bytes with deterministic metadata generation.
+Operates directly on raw bytes to preserve exact binary equivalence across
+all image encodings (PNG, JPEG, WebP, RGBA, grayscale) without container leaks.
+Uses fresh 96-bit CSPRNG nonces per encryption and HMAC-SHA256 authentication
+with Associated Data (AEAD-style Encrypt-then-MAC).
 """
 
-import io
 import hashlib
-import numpy as np
-from typing import Tuple, Union, Optional
-from PIL import Image
+import hmac
+import os
+import struct
+from typing import Optional, Tuple, Union
 
-from encryption.sine_map_permutation import SineMapPermutation
+import numpy as np
+
 from encryption.prime_circulant_substitution import PrimeCirculantSubstitution
+from encryption.sine_map_permutation import SineMapPermutation
 from encryption.tent_map_diffusion import TentMapDiffusion
 
 
 class ChaoticImageEncryption:
     """
-    Orchestrates complete chaotic encryption pipeline for images.
-
-    Pipeline:
-    plaintext bytes → Image array (H×W×C) → Sine Permutation →
-    Prime Substitution → Tent Diffusion → encrypted array → bytes
+    Orchestrates the 3-stage chaotic encryption and Encrypt-then-MAC authentication.
     """
 
     def __init__(self, key: bytes):
@@ -35,184 +35,180 @@ class ChaoticImageEncryption:
         Initialize chaotic encryption pipeline.
 
         Args:
-            key (bytes): 32-byte encryption key.
+            key (bytes): 32-byte master encryption key.
 
         Raises:
             ValueError: If key is not 32 bytes.
         """
         if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
-            raise ValueError(f"Key must be exactly 32 bytes (got {len(key) if isinstance(key, (bytes, bytearray)) else 'non-bytes'})")
+            got = len(key) if isinstance(key, (bytes, bytearray)) else "non-bytes"
+            raise ValueError(f"Key must be exactly 32 bytes (got {got})")
 
-        self.key = key
+        self.key = bytes(key)
 
-    def _load_image_to_array(self, image_bytes: Union[bytes, bytearray]) -> Tuple[np.ndarray, Tuple[int, int]]:
+    def _derive_stage_keys(self, nonce: bytes) -> Tuple[bytes, bytes]:
+        """Derives domain-separated encryption and authentication subkeys from (key, nonce)."""
+        enc_key = hmac.new(self.key, b"chaotic-enc-v2|" + nonce, hashlib.sha256).digest()
+        auth_key = hmac.new(self.key, b"chaotic-auth-v2|" + nonce, hashlib.sha256).digest()
+        return enc_key, auth_key
+
+    def _compute_auth_tag(
+        self,
+        auth_key: bytes,
+        nonce: bytes,
+        ciphertext: bytes,
+        associated_data: Optional[bytes] = None
+    ) -> bytes:
         """
-        Loads image bytes and converts to numpy array.
-
-        Args:
-            image_bytes: Raw image file bytes (PNG, JPG, etc.).
-
-        Returns:
-            Tuple of (pixel_array, (height, width)).
-
-        Raises:
-            ValueError: If image cannot be loaded.
+        Computes 128-bit (16-byte) HMAC-SHA256 authentication tag over
+        nonce, length-prefixed associated_data, and ciphertext.
         """
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-            # Convert to RGB if necessary
-            if img.mode not in ('RGB', 'L', 'RGBA'):
-                img = img.convert('RGB')
-            # Drop alpha channel if present
-            if img.mode == 'RGBA':
-                img = img.convert('RGB')
+        aad = bytes(associated_data) if associated_data is not None else b""
+        mac = hmac.new(auth_key, digestmod=hashlib.sha256)
+        mac.update(nonce)
+        mac.update(struct.pack(">Q", len(aad)))
+        mac.update(aad)
+        mac.update(struct.pack(">Q", len(ciphertext)))
+        mac.update(ciphertext)
+        return mac.digest()[:16]
 
-            arr = np.array(img, dtype=np.uint8)
-            height, width = arr.shape[:2]
+    def _transform_forward(self, raw_bytes: bytes, nonce: bytes, enc_key: bytes) -> bytes:
+        """Executes Sine Permutation -> Prime Circulant Substitution -> Tent Diffusion on raw bytes."""
+        data_arr = np.frombuffer(raw_bytes, dtype=np.uint8)
 
-            return arr, (height, width)
-        except Exception as exc:
-            raise ValueError(f"Failed to load image: {exc}") from exc
+        permuter = SineMapPermutation(enc_key, data_arr.size, nonce=nonce)
+        permuted = permuter.permute_pixels(data_arr)
 
-    def _array_to_image_bytes(self, arr: np.ndarray) -> bytes:
-        """
-        Converts numpy array back to image bytes (PNG).
-
-        Args:
-            arr: Pixel array (uint8).
-
-        Returns:
-            bytes: PNG-encoded image.
-        """
-        # Ensure array is 3D for PIL
-        if len(arr.shape) == 2:
-            arr = np.stack([arr] * 3, axis=-1)
-
-        # Clip to valid range
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
-
-        img = Image.fromarray(arr, mode='RGB' if arr.shape[2] == 3 else 'L')
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        return buf.getvalue()
-
-    def _generate_nonce(self) -> bytes:
-        """
-        Generates 12-byte nonce from key for consistency.
-
-        Returns:
-            bytes: 12-byte nonce.
-        """
-        # Use deterministic approach: hash of key
-        hash_val = hashlib.sha256(self.key + b'nonce').digest()
-        return hash_val[:12]
-
-    def _generate_tag(self, ciphertext: bytes) -> bytes:
-        """
-        Generates authentication tag from ciphertext.
-
-        Args:
-            ciphertext: Encrypted image bytes.
-
-        Returns:
-            bytes: 16-byte authentication tag.
-        """
-        # Tag is SHA-256 of (key + ciphertext)
-        tag_input = self.key + ciphertext
-        tag = hashlib.sha256(tag_input).digest()
-        return tag[:16]
-
-    def encrypt(self, image_bytes: Union[bytes, bytearray]) -> Tuple[bytes, bytes, bytes]:
-        """
-        Encrypts image using chaotic pipeline.
-
-        Args:
-            image_bytes: Raw image file bytes.
-
-        Returns:
-            Tuple of (ciphertext, nonce, tag).
-
-        Raises:
-            ValueError: If image cannot be processed.
-        """
-        if not isinstance(image_bytes, (bytes, bytearray)):
-            raise TypeError(f"image_bytes must be bytes/bytearray, got {type(image_bytes).__name__}")
-
-        if len(image_bytes) == 0:
-            raise ValueError("image_bytes cannot be empty")
-
-        # Step 1: Load image to array
-        pixel_array, (height, width) = self._load_image_to_array(image_bytes)
-
-        # Step 2: Apply Sine Map Permutation
-        sine_permuter = SineMapPermutation(self.key, (height, width))
-        permuted = sine_permuter.permute_pixels(pixel_array)
-
-        # Step 3: Apply Prime Circulant Substitution
-        substituter = PrimeCirculantSubstitution(self.key)
+        substituter = PrimeCirculantSubstitution(enc_key, nonce=nonce)
         substituted = substituter.substitute_pixels(permuted)
 
-        # Step 4: Apply Tent Map Diffusion
-        diffuser = TentMapDiffusion(self.key)
+        diffuser = TentMapDiffusion(enc_key, nonce=nonce)
         diffused = diffuser.diffuse_image(substituted)
 
-        # Step 5: Convert back to bytes
-        ciphertext = self._array_to_image_bytes(diffused)
+        return diffused.tobytes()
 
-        # Step 6: Generate nonce and tag
-        nonce = self._generate_nonce()
-        tag = self._generate_tag(ciphertext)
+    def _transform_inverse(self, cipher_bytes: bytes, nonce: bytes, enc_key: bytes) -> bytes:
+        """Executes Inverse Tent Diffusion -> Inverse Substitution -> Inverse Permutation."""
+        cipher_arr = np.frombuffer(cipher_bytes, dtype=np.uint8)
 
-        return ciphertext, nonce, tag
+        diffuser = TentMapDiffusion(enc_key, nonce=nonce)
+        dediffused = diffuser.inverse_diffuse(cipher_arr)
 
-    def decrypt(self, ciphertext: Union[bytes, bytearray], nonce: bytes, tag: bytes, verify_tag: bool = True) -> bytes:
+        substituter = PrimeCirculantSubstitution(enc_key, nonce=nonce)
+        unsubstituted = substituter.inverse_substitute(dediffused)
+
+        permuter = SineMapPermutation(enc_key, cipher_arr.size, nonce=nonce)
+        depermuted = permuter.inverse_permute(unsubstituted)
+
+        return depermuted.tobytes()
+
+    def encrypt_payload(
+        self,
+        raw_bytes: Union[bytes, bytearray],
+        nonce: Optional[bytes] = None
+    ) -> Tuple[bytes, bytes]:
         """
-        Decrypts image using reverse chaotic pipeline.
-
-        Args:
-            ciphertext: Encrypted image bytes.
-            nonce: 12-byte nonce.
-            tag: 16-byte authentication tag.
-            verify_tag: If True, verify tag before decryption.
-
-        Returns:
-            bytes: Decrypted image bytes.
-
-        Raises:
-            ValueError: If parameters are invalid.
-            ValueError: If tag verification fails.
+        Applies the 3-stage chaotic forward transform without generating a separate MAC tag.
+        Used internally by Hybrid-Chaotic-AES where AES-GCM provides the AEAD tag.
         """
-        if not isinstance(ciphertext, (bytes, bytearray)):
-            raise TypeError(f"ciphertext must be bytes/bytearray, got {type(ciphertext).__name__}")
+        if not isinstance(raw_bytes, (bytes, bytearray)):
+            raise TypeError(f"raw_bytes must be bytes/bytearray, got {type(raw_bytes).__name__}")
+        if len(raw_bytes) == 0:
+            raise ValueError("image_bytes cannot be empty")
 
+        resolved_nonce = bytes(nonce) if nonce is not None else os.urandom(12)
+        if len(resolved_nonce) != 12:
+            raise ValueError(f"nonce must be 12 bytes (got {len(resolved_nonce)})")
+
+        enc_key, _ = self._derive_stage_keys(resolved_nonce)
+        transformed = self._transform_forward(bytes(raw_bytes), resolved_nonce, enc_key)
+        return transformed, resolved_nonce
+
+    def decrypt_payload(self, transformed_bytes: Union[bytes, bytearray], nonce: bytes) -> bytes:
+        """Reverses `encrypt_payload` for Hybrid-Chaotic-AES after outer AEAD verification."""
+        if not isinstance(transformed_bytes, (bytes, bytearray)):
+            raise TypeError(f"transformed_bytes must be bytes/bytearray, got {type(transformed_bytes).__name__}")
+        if len(transformed_bytes) == 0:
+            raise ValueError("ciphertext cannot be empty")
         if len(nonce) != 12:
             raise ValueError(f"nonce must be 12 bytes (got {len(nonce)})")
 
+        enc_key, _ = self._derive_stage_keys(bytes(nonce))
+        return self._transform_inverse(bytes(transformed_bytes), bytes(nonce), enc_key)
+
+    def encrypt(
+        self,
+        image_bytes: Union[bytes, bytearray],
+        associated_data: Optional[bytes] = None,
+        nonce: Optional[bytes] = None
+    ) -> Tuple[bytes, bytes, bytes]:
+        """
+        Encrypts raw image bytes using the authenticated 3-stage chaotic pipeline.
+
+        Args:
+            image_bytes (Union[bytes, bytearray]): Raw binary image data.
+            associated_data (Optional[bytes]): Optional unencrypted data authenticated with the tag.
+            nonce (Optional[bytes]): Optional 12-byte nonce (generated via os.urandom(12) if omitted).
+
+        Returns:
+            Tuple[bytes, bytes, bytes]: (ciphertext, nonce, tag)
+        """
+        if not isinstance(image_bytes, (bytes, bytearray)):
+            raise TypeError(f"image_bytes must be bytes/bytearray, got {type(image_bytes).__name__}")
+        if len(image_bytes) == 0:
+            raise ValueError("image_bytes cannot be empty")
+
+        resolved_nonce = bytes(nonce) if nonce is not None else os.urandom(12)
+        if len(resolved_nonce) != 12:
+            raise ValueError(f"nonce must be 12 bytes (got {len(resolved_nonce)})")
+
+        enc_key, auth_key = self._derive_stage_keys(resolved_nonce)
+        ciphertext = self._transform_forward(bytes(image_bytes), resolved_nonce, enc_key)
+        tag = self._compute_auth_tag(auth_key, resolved_nonce, ciphertext, associated_data)
+
+        return ciphertext, resolved_nonce, tag
+
+    def decrypt(
+        self,
+        ciphertext: Union[bytes, bytearray],
+        nonce: bytes,
+        tag: bytes,
+        verify_tag: bool = True,
+        associated_data: Optional[bytes] = None
+    ) -> bytes:
+        """
+        Verifies HMAC authentication tag and recovers exact original bytes.
+
+        Args:
+            ciphertext (Union[bytes, bytearray]): Encrypted bytes.
+            nonce (bytes): 12-byte nonce.
+            tag (bytes): 16-byte authentication tag.
+            verify_tag (bool): If True, verifies tag in constant time before decryption.
+            associated_data (Optional[bytes]): Optional associated data bound to tag.
+
+        Returns:
+            bytes: Recovered raw bytes matching the original input bit-for-bit.
+
+        Raises:
+            ValueError: If parameters are invalid or tag verification fails.
+        """
+        if not isinstance(ciphertext, (bytes, bytearray)):
+            raise TypeError(f"ciphertext must be bytes/bytearray, got {type(ciphertext).__name__}")
+        if len(ciphertext) == 0:
+            raise ValueError("ciphertext cannot be empty")
+        if len(nonce) != 12:
+            raise ValueError(f"nonce must be 12 bytes (got {len(nonce)})")
         if len(tag) != 16:
             raise ValueError(f"tag must be 16 bytes (got {len(tag)})")
 
-        # Verify tag if requested
+        enc_key, auth_key = self._derive_stage_keys(bytes(nonce))
+        ciphertext_bytes = bytes(ciphertext)
+
         if verify_tag:
-            expected_tag = self._generate_tag(bytes(ciphertext))
-            if expected_tag != bytes(tag):
-                raise ValueError("Authentication tag verification failed: ciphertext has been modified or wrong key")
+            expected_tag = self._compute_auth_tag(auth_key, bytes(nonce), ciphertext_bytes, associated_data)
+            if not hmac.compare_digest(expected_tag, bytes(tag)):
+                raise ValueError(
+                    "Authentication tag verification failed: ciphertext has been modified or wrong key"
+                )
 
-        # Step 1: Load encrypted image to array
-        encrypted_array, (height, width) = self._load_image_to_array(ciphertext)
-
-        # Step 2: Reverse Tent Map Diffusion
-        diffuser = TentMapDiffusion(self.key)
-        dediffused = diffuser.inverse_diffuse(encrypted_array)
-
-        # Step 3: Reverse Prime Circulant Substitution
-        substituter = PrimeCirculantSubstitution(self.key)
-        unsubstituted = substituter.inverse_substitute(dediffused)
-
-        # Step 4: Reverse Sine Map Permutation
-        sine_permuter = SineMapPermutation(self.key, (height, width))
-        depermuted = sine_permuter.inverse_permute(unsubstituted)
-
-        # Step 5: Convert back to bytes
-        plaintext = self._array_to_image_bytes(depermuted)
-
-        return plaintext
+        return self._transform_inverse(ciphertext_bytes, bytes(nonce), enc_key)

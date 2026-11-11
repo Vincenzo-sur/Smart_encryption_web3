@@ -14,42 +14,42 @@ from typing import Dict, Any
 @dataclass(frozen=True)
 class EncryptionResult:
     ciphertext: bytes
-    nonce: bytes          # 12-byte IV for AES-GCM
-    tag: bytes            # 16-byte authentication tag
+    nonce: bytes          # 12-byte CSPRNG IV
+    tag: bytes            # 16-byte authentication tag (GCM or HMAC-SHA256)
     key_id: str           # Unique identifier or reference for key management
+    algorithm: str = "AES-256-GCM"
 
-    def to_metadata(self) -> Dict[str, str]:
-        """Serializes nonce and tag as hexadecimal strings for storage/transport."""
+    def to_metadata(self) -> Dict[str, Any]:
+        """Serializes algorithm, nonce, tag, key_id, and length for storage/transport."""
         return {
+            "algorithm": self.algorithm,
             "nonce": self.nonce.hex(),
             "tag": self.tag.hex(),
-            "key_id": self.key_id
+            "key_id": self.key_id,
+            "ciphertext_length": len(self.ciphertext),
         }
 ```
 
 ### 1.2 Functions
-#### `generate_encryption_key() -> bytes`
-- **Description**: Generates a cryptographically strong 256-bit (32-byte) symmetric key using a secure OS CSPRNG.
+#### `generate_encryption_key(length: int = 32) -> bytes`
+- **Description**: Generates a cryptographically strong 256-bit (32-byte) symmetric key using `secrets.token_bytes`.
 - **Returns**: `bytes` of length 32.
-- **Exceptions**: `KeyGenerationError` on CSPRNG failure.
+- **Exceptions**: `ValueError` / `KeyManagementError` on invalid length or CSPRNG failure.
 
-#### `encrypt_image(image_bytes: bytes, key: bytes) -> EncryptionResult`
-- **Description**: Encrypts raw image bytes using AES-256-GCM with a fresh 12-byte nonce.
+#### `encrypt_image(image_bytes: bytes, key: bytes, associated_data: Optional[bytes] = None, key_id: Optional[str] = None, algorithm: str = "AES-256-GCM") -> EncryptionResult`
+- **Description**: Encrypts raw image bytes using the selected cipher (`AES-256-GCM`, `Chaotic-Tent-Map`, or `Hybrid-Chaotic-AES`) with a fresh 12-byte CSPRNG nonce.
 - **Parameters**:
   - `image_bytes`: `bytes` representing the raw binary image.
   - `key`: `bytes` of length 32.
-- **Returns**: `EncryptionResult` containing ciphertext, nonce, tag, and key_id.
-- **Exceptions**: `EncryptionError`, `ValueError` if key length != 32.
+  - `associated_data`: optional `bytes` bound to the authentication tag.
+  - `algorithm`: cipher mode identifier.
+- **Returns**: `EncryptionResult` containing ciphertext, nonce, tag, key_id, and algorithm.
+- **Exceptions**: `EncryptionError`, `ValueError` if key length != 32 or algorithm is unsupported.
 
-#### `decrypt_image(ciphertext: bytes, key: bytes, nonce: bytes, tag: bytes) -> bytes`
-- **Description**: Authenticates and decrypts ciphertext using AES-256-GCM.
-- **Parameters**:
-  - `ciphertext`: `bytes` of encrypted data.
-  - `key`: `bytes` of length 32.
-  - `nonce`: `bytes` of length 12.
-  - `tag`: `bytes` of length 16.
-- **Returns**: Original `bytes` of the image.
-- **Exceptions**: `AuthenticationError` (if ciphertext or tag was tampered with, or key is incorrect), `DecryptionError`.
+#### `decrypt_image(ciphertext: bytes, key: bytes, metadata: Optional[Union[Dict[str, Any], bytes]] = None, nonce: Optional[bytes] = None, tag: Optional[bytes] = None, associated_data: Optional[bytes] = None, algorithm: Optional[str] = None) -> bytes`
+- **Description**: Authenticates and decrypts ciphertext, dispatching by explicit `algorithm` or `metadata["algorithm"]` (defaults to `AES-256-GCM`).
+- **Returns**: Original `bytes` of the image (exact bit-for-bit recovery).
+- **Exceptions**: `AuthenticationError` (if ciphertext, tag, AAD, or key fails verification), `DecryptionError`, `ValueError`.
 
 ---
 

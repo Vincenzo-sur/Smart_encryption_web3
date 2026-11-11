@@ -47,6 +47,10 @@ class DecryptRequest(BaseModel):
     nonce_hex: str = Field(..., description="12-byte nonce in hexadecimal")
     tag_hex: str = Field(..., description="16-byte authentication tag in hexadecimal")
     requester_address: str = Field(..., description="Ethereum address of the requester")
+    algorithm: Optional[str] = Field(
+        None,
+        description="Cipher algorithm ('AES-256-GCM', 'Chaotic-Tent-Map', 'Hybrid-Chaotic-AES'). Auto-resolved from metadata cache if omitted."
+    )
     signature: Optional[str] = Field(None, description="EIP-191 signature proving identity")
     challenge: Optional[str] = Field(None, description="Original challenge string signed by wallet")
 

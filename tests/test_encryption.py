@@ -1,15 +1,21 @@
 """
-Unit Tests for Chaotic Tent Map Encryption, Decryption, and Key Management
+Unit Tests for Authenticated Image Encryption, Decryption, and Key Management
 
-Adapted from AES-256-GCM tests to work with Chaotic Encryption.
-All 12 tests pass with new algorithm while maintaining API compatibility.
+Covers default AES-256-GCM behavior, strict nonce uniqueness, tamper rejection,
+and multi-algorithm dispatch.
 """
 
 import io
 import pytest
 from PIL import Image
 from encryption.key_manager import generate_encryption_key, key_to_hex, hex_to_key, KeyManagementError
-from encryption.encrypt import encrypt_image, EncryptionResult, EncryptionError
+from encryption.encrypt import (
+    encrypt_image,
+    EncryptionResult,
+    EncryptionError,
+    ALGORITHM_AES_GCM,
+    SUPPORTED_ALGORITHMS,
+)
 from encryption.decrypt import decrypt_image, AuthenticationError, DecryptionError
 
 
@@ -39,77 +45,63 @@ class TestKeyManager:
 
 
 class TestEncryptionDecryption:
-    def test_roundtrip_recovery(self):
+    @pytest.mark.parametrize("algorithm", SUPPORTED_ALGORITHMS)
+    def test_roundtrip_recovery(self, algorithm):
         original_bytes = create_synthetic_image_bytes()
         key = generate_encryption_key(32)
 
-        # Encrypt
-        result = encrypt_image(original_bytes, key)
+        result = encrypt_image(original_bytes, key, algorithm=algorithm)
         assert isinstance(result, EncryptionResult)
+        assert result.algorithm == algorithm
         assert len(result.nonce) == 12
         assert len(result.tag) == 16
         assert len(result.ciphertext) > 0
         assert result.ciphertext != original_bytes
 
-        # Decrypt
         recovered_bytes = decrypt_image(
             ciphertext=result.ciphertext,
             key=key,
             nonce=result.nonce,
-            tag=result.tag
+            tag=result.tag,
+            algorithm=algorithm,
         )
         assert recovered_bytes == original_bytes
 
-    def test_unpacking_interface(self):
-        """Tests that `ciphertext, metadata = encrypt_image(image_bytes, key)` works."""
+    @pytest.mark.parametrize("algorithm", SUPPORTED_ALGORITHMS)
+    def test_unpacking_interface(self, algorithm):
+        """Tests that `ciphertext, metadata = encrypt_image(...)` preserves algorithm dispatch."""
         original_bytes = create_synthetic_image_bytes()
         key = generate_encryption_key(32)
 
-        ciphertext, metadata = encrypt_image(original_bytes, key)
+        ciphertext, metadata = encrypt_image(original_bytes, key, algorithm=algorithm)
         assert isinstance(ciphertext, bytes)
         assert isinstance(metadata, dict)
+        assert metadata["algorithm"] == algorithm
         assert "nonce" in metadata
         assert "tag" in metadata
 
         recovered = decrypt_image(ciphertext, key, metadata)
         assert recovered == original_bytes
 
-    def test_nonce_uniqueness(self):
-        """
-        Tests chaotic encryption properties under repeated encryptions.
-
-        Note: Chaotic nonce is deterministic from key (not random per NIST).
-        However, due to chaotic nature of diffusion, ciphertexts may differ
-        if implementation includes non-deterministic elements.
-        For this test, we verify nonce consistency and tag validity.
-        """
+    @pytest.mark.parametrize("algorithm", SUPPORTED_ALGORITHMS)
+    def test_nonce_uniqueness(self, algorithm):
+        """Ensures consecutive encryptions under the same key generate unique nonces and ciphertexts."""
         data = create_synthetic_image_bytes()
         key = generate_encryption_key(32)
 
-        r1 = encrypt_image(data, key)
-        r2 = encrypt_image(data, key)
+        r1 = encrypt_image(data, key, algorithm=algorithm)
+        r2 = encrypt_image(data, key, algorithm=algorithm)
 
-        # Nonce should be deterministic from key
-        assert r1.nonce == r2.nonce
+        assert r1.nonce != r2.nonce
+        assert r1.ciphertext != r2.ciphertext
 
-        # Ciphertexts should be same (deterministic encryption with chaotic elements)
-        # or at least both be valid under the same tag
-        assert len(r1.ciphertext) > 0
-        assert len(r2.ciphertext) > 0
-
-        # Both should decrypt successfully
-        recovered1 = decrypt_image(r1.ciphertext, key, nonce=r1.nonce, tag=r1.tag)
-        recovered2 = decrypt_image(r2.ciphertext, key, nonce=r2.nonce, tag=r2.tag)
-        assert recovered1 == data
-        assert recovered2 == data
-
-    def test_tampered_ciphertext_fails(self):
+    @pytest.mark.parametrize("algorithm", SUPPORTED_ALGORITHMS)
+    def test_tampered_ciphertext_fails(self, algorithm):
         """Modifying any byte of the ciphertext must trigger AuthenticationError."""
         original_bytes = create_synthetic_image_bytes()
         key = generate_encryption_key(32)
-        result = encrypt_image(original_bytes, key)
+        result = encrypt_image(original_bytes, key, algorithm=algorithm)
 
-        # Flip a bit in the ciphertext
         corrupted = bytearray(result.ciphertext)
         corrupted[0] ^= 0xFF
 
@@ -118,24 +110,33 @@ class TestEncryptionDecryption:
                 ciphertext=bytes(corrupted),
                 key=key,
                 nonce=result.nonce,
-                tag=result.tag
+                tag=result.tag,
+                algorithm=algorithm,
             )
 
-    def test_incorrect_key_fails(self):
+    @pytest.mark.parametrize("algorithm", SUPPORTED_ALGORITHMS)
+    def test_incorrect_key_fails(self, algorithm):
         """Decrypting with a different 256-bit key must fail authentication."""
         original_bytes = create_synthetic_image_bytes()
         key1 = generate_encryption_key(32)
         key2 = generate_encryption_key(32)
 
-        result = encrypt_image(original_bytes, key1)
+        result = encrypt_image(original_bytes, key1, algorithm=algorithm)
 
         with pytest.raises(AuthenticationError):
             decrypt_image(
                 ciphertext=result.ciphertext,
                 key=key2,
                 nonce=result.nonce,
-                tag=result.tag
+                tag=result.tag,
+                algorithm=algorithm,
             )
+
+    def test_default_algorithm_is_aes_gcm(self):
+        data = create_synthetic_image_bytes()
+        key = generate_encryption_key(32)
+        result = encrypt_image(data, key)
+        assert result.algorithm == ALGORITHM_AES_GCM
 
     def test_empty_image_error(self):
         key = generate_encryption_key(32)

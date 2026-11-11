@@ -25,8 +25,8 @@ By combining symmetric authenticated encryption (AES-256-GCM), decentralized con
 
 ### Core Subsystems
 1. **Cryptography Subsystem (`encryption/`, `hashing/`)**:
-   - AES-256-GCM authenticated cipher engine with fresh 96-bit CSPRNG nonces per encryption.
-   - 128-bit authentication tag verification ensuring immediate detection of ciphertext or metadata tampering.
+   - Multi-mode authenticated cipher engine supporting `AES-256-GCM` (default), hardened `Chaotic-Tent-Map` (Sine Map + Prime Circulant + Skewed Tent Map), and `Hybrid-Chaotic-AES` with fresh 96-bit CSPRNG nonces per encryption.
+   - 128-bit authentication tag verification (GCM / HMAC-SHA256) ensuring immediate detection of ciphertext, metadata, or associated data tampering.
    - SHA-256 cryptographic hashing producing hexadecimal digests and EVM `bytes32` values.
 2. **Blockchain Subsystem (`blockchain/`)**:
    - Solidity smart contract (`ImageRegistry.sol`) anchoring image IDs, owners, SHA-256 digests, and IPFS CIDs.

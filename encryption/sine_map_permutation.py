@@ -1,218 +1,211 @@
 """
 Sine Map Chaotic Permutation Module
 
-Implements pixel-level permutation using the Sine Map chaotic generator.
-The Sine Map is defined as: x_{i+1} = μ * sin(π * x_i)
-where μ is derived from the encryption key.
+Implements byte- and pixel-level spatial permutation using the 1D Sine Map
+chaotic system:
+    x_{i+1} = mu * sin(pi * x_i)
 
-This achieves diffusion by rearranging pixel positions, making the spatial
-correlation in the encrypted image negligible.
+Control parameter mu is constrained to the valid chaotic regime [0.87, 0.999]
+so trajectories remain strictly bounded in (0, 1). A transient burn-in phase is
+discarded before sampling, and parameters are derived from (key, nonce) via
+HMAC-SHA256 so each encryption uses an independent permutation.
 """
 
-import numpy as np
-from typing import Tuple
 import hashlib
+import hmac
+import math
+from typing import Tuple, Union
+
+import numpy as np
 
 
 class SineMapPermutation:
     """
-    Generates pixel permutation sequences using the Sine Map chaos system.
-
-    The Sine Map is sensitive to initial conditions, ensuring that different keys
-    produce completely different permutation sequences.
+    Generates invertible permutation sequences using the Sine Map chaos system.
+    Supports both 1D raw byte arrays and 2D/3D uint8 image matrices.
     """
 
-    def __init__(self, key: bytes, image_shape: Tuple[int, int]):
+    BURN_IN_ITERATIONS = 100
+
+    def __init__(
+        self,
+        key: bytes,
+        image_shape: Union[int, Tuple[int, ...]],
+        nonce: bytes = b""
+    ):
         """
         Initialize Sine Map permutation generator.
 
         Args:
             key (bytes): 32-byte encryption key.
-            image_shape (Tuple[int, int]): Tuple of (height, width) for the image.
+            image_shape (Union[int, Tuple[int, ...]]): Total element count (int)
+                or image shape tuple (height, width[, channels]).
+            nonce (bytes): Per-encryption nonce for permutation independence.
 
         Raises:
             ValueError: If key is not 32 bytes or image_shape is invalid.
         """
         if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
-            raise ValueError(f"Key must be exactly 32 bytes (got {len(key) if isinstance(key, (bytes, bytearray)) else 'non-bytes'})")
+            got = len(key) if isinstance(key, (bytes, bytearray)) else "non-bytes"
+            raise ValueError(f"Key must be exactly 32 bytes (got {got})")
 
-        if not isinstance(image_shape, tuple) or len(image_shape) != 2:
-            raise ValueError("image_shape must be a tuple of (height, width)")
+        if not isinstance(nonce, (bytes, bytearray)):
+            raise TypeError("nonce must be bytes or bytearray")
 
-        height, width = image_shape
-        if height <= 0 or width <= 0:
-            raise ValueError("Image dimensions must be positive")
+        if isinstance(image_shape, int):
+            if image_shape <= 0:
+                raise ValueError("Image length must be positive")
+            self.height = 1
+            self.width = image_shape
+            self.total_pixels = image_shape
+        elif isinstance(image_shape, tuple) and len(image_shape) >= 2:
+            height, width = int(image_shape[0]), int(image_shape[1])
+            if height <= 0 or width <= 0:
+                raise ValueError("Image dimensions must be positive")
+            self.height = height
+            self.width = width
+            self.total_pixels = height * width
+        else:
+            raise ValueError("image_shape must be a positive int or a tuple of (height, width[, ...])")
 
-        self.key = key
-        self.height = height
-        self.width = width
-        self.total_pixels = height * width
-
-        # Derive Sine Map parameters from key
+        self.key = bytes(key)
+        self.nonce = bytes(nonce)
         self._derive_parameters()
+        self._cached_indices: np.ndarray | None = None
 
-    def _derive_parameters(self):
+    def _derive_parameters(self) -> None:
         """
-        Derives Sine Map parameters (μ and x0) from the encryption key.
-
-        Uses SHA-256 hashing to extract deterministic parameters from the key.
+        Derives Sine Map parameters (mu, x0) from (key, nonce) via HMAC-SHA256.
+        Constrains mu to [0.87, 0.999] so x stays strictly within (0, 1).
         """
-        # Derive μ (control parameter) from key
-        # μ is typically in range [0, 1] for chaos in Sine Map
-        hash1 = hashlib.sha256(self.key).digest()
-        mu_val = int.from_bytes(hash1[:8], byteorder='big') / (2**64)
-        # Scale μ to typical chaotic region [2.0, 4.0]
-        self.mu = 2.0 + mu_val * 2.0
+        digest = hmac.new(self.key, b"sine-map-params|" + self.nonce, hashlib.sha256).digest()
+        mu_unit = int.from_bytes(digest[:8], byteorder="big") / (2**64)
+        x0_unit = int.from_bytes(digest[8:16], byteorder="big") / (2**64)
 
-        # Derive initial x0 from key
-        hash2 = hashlib.sha256(self.key + b'x0').digest()
-        x0_val = int.from_bytes(hash2[:8], byteorder='big') / (2**64)
-        # Ensure x0 is in (0, 1) excluding boundaries
-        self.x0 = 0.1 + x0_val * 0.8
+        self.mu = 0.87 + mu_unit * 0.129
+        self.x0 = 0.05 + x0_unit * 0.90
 
     def _generate_sine_sequence(self, length: int) -> np.ndarray:
         """
-        Generates chaotic sequence using Sine Map.
+        Generates chaotic sequence using scalar math.sin after transient burn-in.
 
         Args:
-            length (int): Number of values to generate.
+            length (int): Number of chaotic values to generate.
 
         Returns:
-            np.ndarray: Array of chaotic values in [0, 1).
+            np.ndarray: Float64 array of chaotic values in (0, 1).
         """
-        sequence = np.zeros(length, dtype=np.float64)
         x = self.x0
+        mu = self.mu
+        pi = math.pi
+        sin = math.sin
 
+        for _ in range(self.BURN_IN_ITERATIONS):
+            x = mu * sin(pi * x)
+            if x <= 1e-12 or x >= 1.0 - 1e-12:
+                x = 0.3141592653589793
+
+        sequence = np.empty(length, dtype=np.float64)
         for i in range(length):
-            # Sine Map iteration: x_{i+1} = μ * sin(π * x_i)
-            x = self.mu * np.sin(np.pi * x)
-            # Ensure x stays in [0, 1] by taking absolute value
-            x = np.abs(x)
+            x = mu * sin(pi * x)
+            if x <= 1e-12 or x >= 1.0 - 1e-12:
+                # Re-seed perturbatively from index to prevent fixed-point trapping
+                x = ((x + (i + 1) * 0.6180339887498949) % 0.9) + 0.05
             sequence[i] = x
 
         return sequence
 
     def _generate_permutation_indices(self) -> np.ndarray:
         """
-        Generates permutation indices for pixel rearrangement.
+        Generates deterministic permutation indices for the configured size.
 
         Returns:
-            np.ndarray: Array of permutation indices.
+            np.ndarray: Integer permutation index array of length `total_pixels`.
         """
-        # Generate chaotic sequence
-        chaotic_seq = self._generate_sine_sequence(self.total_pixels)
-
-        # Convert chaotic values to indices [0, total_pixels)
-        indices = np.argsort(chaotic_seq)
-
-        return indices
+        if self._cached_indices is None:
+            chaotic_seq = self._generate_sine_sequence(self.total_pixels)
+            self._cached_indices = np.argsort(chaotic_seq, kind="mergesort")
+        return self._cached_indices
 
     def permute_pixels(self, image: np.ndarray) -> np.ndarray:
         """
-        Rearranges pixel positions using Sine Map-generated permutation.
-
-        Handles multi-channel images by permuting within each channel separately.
+        Rearranges byte/pixel positions using the Sine Map permutation.
 
         Args:
-            image (np.ndarray): Input image array (H×W or H×W×C).
+            image (np.ndarray): Input uint8 array (1D, HxW, or HxWxC).
 
         Returns:
-            np.ndarray: Permuted image array with same shape as input.
+            np.ndarray: Permuted uint8 array with the exact same shape as input.
         """
         if not isinstance(image, np.ndarray):
             raise TypeError(f"image must be np.ndarray, got {type(image).__name__}")
 
-        original_shape = image.shape
+        arr = image if image.dtype == np.uint8 else image.astype(np.uint8)
+        original_shape = arr.shape
+        indices = self._generate_permutation_indices()
 
-        # Handle multi-channel images
-        if len(original_shape) == 3:
-            # Image is H×W×C
-            h, w, c = original_shape
-            if h != self.height or w != self.width:
+        if arr.ndim == 1:
+            if arr.shape[0] != self.total_pixels:
                 raise ValueError(
-                    f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}"
+                    f"Array length {arr.shape[0]} does not match expected {self.total_pixels}"
                 )
+            return arr[indices].copy()
 
-            # Apply permutation to each channel
-            permuted_channels = []
-            for ch in range(c):
-                channel = image[:, :, ch].astype(np.float64)
-                flat_channel = channel.flatten()
-                indices = self._generate_permutation_indices()
-                permuted_flat = flat_channel[indices]
-                permuted_channel = permuted_flat.reshape((h, w))
-                permuted_channels.append(permuted_channel)
-
-            return np.stack(permuted_channels, axis=-1)
-
-        elif len(original_shape) == 2:
-            # Grayscale image: H×W
+        if arr.ndim == 2:
             h, w = original_shape
-            if h != self.height or w != self.width:
-                raise ValueError(
-                    f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}"
-                )
+            if (h, w) != (self.height, self.width):
+                raise ValueError(f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}")
+            return arr.reshape(-1)[indices].reshape(original_shape)
 
-            flat_image = image.flatten().astype(np.float64)
-            indices = self._generate_permutation_indices()
-            permuted = flat_image[indices]
-            return permuted.reshape(original_shape)
+        if arr.ndim == 3:
+            h, w, c = original_shape
+            if (h, w) != (self.height, self.width):
+                raise ValueError(f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}")
+            flat_channels = arr.reshape(self.total_pixels, c)
+            return flat_channels[indices, :].reshape(original_shape)
 
-        else:
-            raise ValueError(f"Unsupported image shape: {original_shape}")
+        raise ValueError(f"Unsupported image shape: {original_shape}")
 
     def inverse_permute(self, image: np.ndarray) -> np.ndarray:
         """
-        Reverses the permutation for decryption.
-
-        Handles multi-channel images by reversing permutation within each channel separately.
+        Reverses the Sine Map permutation in O(N) time.
 
         Args:
-            image (np.ndarray): Permuted image array (H×W or H×W×C).
+            image (np.ndarray): Permuted uint8 array (1D, HxW, or HxWxC).
 
         Returns:
-            np.ndarray: Restored image array.
+            np.ndarray: Restored uint8 array with the exact same shape as input.
         """
         if not isinstance(image, np.ndarray):
             raise TypeError(f"image must be np.ndarray, got {type(image).__name__}")
 
-        original_shape = image.shape
+        arr = image if image.dtype == np.uint8 else image.astype(np.uint8)
+        original_shape = arr.shape
+        indices = self._generate_permutation_indices()
 
-        # Handle multi-channel images
-        if len(original_shape) == 3:
-            # Image is H×W×C
-            h, w, c = original_shape
-            if h != self.height or w != self.width:
+        if arr.ndim == 1:
+            if arr.shape[0] != self.total_pixels:
                 raise ValueError(
-                    f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}"
+                    f"Array length {arr.shape[0]} does not match expected {self.total_pixels}"
                 )
+            restored = np.empty_like(arr)
+            restored[indices] = arr
+            return restored
 
-            # Reverse permutation for each channel
-            restored_channels = []
-            for ch in range(c):
-                channel = image[:, :, ch].astype(np.float64)
-                flat_channel = channel.flatten()
-                indices = self._generate_permutation_indices()
-                inverse_indices = np.argsort(indices)
-                restored_flat = flat_channel[inverse_indices]
-                restored_channel = restored_flat.reshape((h, w))
-                restored_channels.append(restored_channel)
-
-            return np.stack(restored_channels, axis=-1)
-
-        elif len(original_shape) == 2:
-            # Grayscale image: H×W
+        if arr.ndim == 2:
             h, w = original_shape
-            if h != self.height or w != self.width:
-                raise ValueError(
-                    f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}"
-                )
-
-            flat_image = image.flatten().astype(np.float64)
-            indices = self._generate_permutation_indices()
-            inverse_indices = np.argsort(indices)
-            restored = flat_image[inverse_indices]
+            if (h, w) != (self.height, self.width):
+                raise ValueError(f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}")
+            restored = np.empty(self.total_pixels, dtype=np.uint8)
+            restored[indices] = arr.reshape(-1)
             return restored.reshape(original_shape)
 
-        else:
-            raise ValueError(f"Unsupported image shape: {original_shape}")
+        if arr.ndim == 3:
+            h, w, c = original_shape
+            if (h, w) != (self.height, self.width):
+                raise ValueError(f"Image dimensions {(h, w)} don't match expected {(self.height, self.width)}")
+            restored = np.empty((self.total_pixels, c), dtype=np.uint8)
+            restored[indices, :] = arr.reshape(self.total_pixels, c)
+            return restored.reshape(original_shape)
+
+        raise ValueError(f"Unsupported image shape: {original_shape}")

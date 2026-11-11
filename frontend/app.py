@@ -55,8 +55,8 @@ else:
 
 st.sidebar.divider()
 st.sidebar.info(
-    "**Architecture Standard**: AES-256-GCM authenticated cipher engine + "
-    "SHA-256 content addressing + Ethereum smart contract access controls."
+    "**Architecture Standard**: AES-256-GCM, Chaotic Tent Map & Hybrid Chaotic-AES "
+    "+ SHA-256 content addressing + Ethereum smart contract access controls."
 )
 
 # Header
@@ -76,7 +76,7 @@ tab_upload, tab_verify, tab_access, tab_system = st.tabs([
 # -------------------------------------------------------------
 with tab_upload:
     st.subheader("1. Ingest, Encrypt & Register Image")
-    st.write("Upload an image to perform AES-256-GCM encryption, compute SHA-256 digest, and store on IPFS.")
+    st.write("Upload an image to encrypt using the selected cipher, compute SHA-256 digest, and store on IPFS.")
 
     col1, col2 = st.columns([1, 1])
 
@@ -86,6 +86,12 @@ with tab_upload:
             "Owner Ethereum Address",
             value="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
             help="Public Ethereum address claiming ownership."
+        )
+        selected_algorithm = st.selectbox(
+            "Encryption Algorithm",
+            options=["AES-256-GCM", "Hybrid-Chaotic-AES", "Chaotic-Tent-Map"],
+            index=0,
+            help="AES-256-GCM (default FIPS AEAD), Hybrid-Chaotic-AES (chaotic confusion/diffusion + AES-GCM), or Chaotic-Tent-Map."
         )
         custom_key = st.text_input(
             "Custom 256-bit Key (Hex, Optional)",
@@ -108,7 +114,7 @@ with tab_upload:
             with st.spinner("Executing cryptographic encryption & registration pipeline..."):
                 try:
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-                    data = {"owner_address": owner_address}
+                    data = {"owner_address": owner_address, "algorithm": selected_algorithm}
                     if custom_key:
                         data["key_hex"] = custom_key
 
@@ -128,7 +134,8 @@ with tab_upload:
                         })
 
                         st.warning(
-                            f"**Save Your Decryption Key Securely (Never Shared On-Chain):**\n\n"
+                            f"**Save Your Decryption Parameters Securely (Never Shared On-Chain):**\n\n"
+                            f"`Algorithm`: `{result['encryption_metadata']['algorithm']}`\n\n"
                             f"`Key (Hex)`: `{result['key_hex']}`\n\n"
                             f"`Nonce (Hex)`: `{result['encryption_metadata']['nonce']}`\n\n"
                             f"`Tag (Hex)`: `{result['encryption_metadata']['tag']}`"
@@ -151,6 +158,12 @@ with tab_verify:
     with v_col1:
         query_image_id = st.text_input("Image ID (bytes32 hex)", placeholder="0x...")
         requester_wallet = st.text_input("Requester Wallet Address", value="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")
+        dec_algorithm = st.selectbox(
+            "Cipher Algorithm",
+            options=["Auto-detect", "AES-256-GCM", "Hybrid-Chaotic-AES", "Chaotic-Tent-Map"],
+            index=0,
+            help="Select the encryption algorithm used during upload, or Auto-detect from server metadata."
+        )
         dec_key = st.text_input("Symmetric Key (Hex)", type="password")
         dec_nonce = st.text_input("Nonce (Hex)")
         dec_tag = st.text_input("Authentication Tag (Hex)")
@@ -190,6 +203,8 @@ with tab_verify:
                             "tag_hex": dec_tag,
                             "requester_address": requester_wallet
                         }
+                        if dec_algorithm != "Auto-detect":
+                            payload["algorithm"] = dec_algorithm
                         resp = requests.post(f"{BACKEND_API_URL}/images/{query_image_id}/decrypt", json=payload, timeout=30)
                         if resp.status_code == 200:
                             recovered_img = Image.open(io.BytesIO(resp.content))

@@ -1,11 +1,19 @@
 """
 Encryption subsystem package.
-Exposes Chaotic Tent Map authenticated encryption, decryption, key management,
-and chaotic components (Sine Map, Prime Circulant, Tent Map).
+Exposes AES-256-GCM, hardened Chaotic Tent Map, and Hybrid Chaotic-AES
+authenticated encryption, decryption, key management, and chaotic stage primitives.
 """
 
 from encryption.key_manager import generate_encryption_key, key_to_hex, hex_to_key, KeyManagementError
-from encryption.encrypt import encrypt_image, EncryptionResult, EncryptionError
+from encryption.encrypt import (
+    encrypt_image,
+    EncryptionResult,
+    EncryptionError,
+    ALGORITHM_AES_GCM,
+    ALGORITHM_CHAOTIC,
+    ALGORITHM_HYBRID,
+    SUPPORTED_ALGORITHMS,
+)
 from encryption.decrypt import decrypt_image, DecryptionError, AuthenticationError
 from encryption.sine_map_permutation import SineMapPermutation
 from encryption.prime_circulant_substitution import PrimeCirculantSubstitution
@@ -23,8 +31,12 @@ __all__ = [
     "DecryptionError",
     "AuthenticationError",
     "KeyManagementError",
+    "ALGORITHM_AES_GCM",
+    "ALGORITHM_CHAOTIC",
+    "ALGORITHM_HYBRID",
+    "SUPPORTED_ALGORITHMS",
     "SineMapPermutation",
     "PrimeCirculantSubstitution",
     "TentMapDiffusion",
-    "ChaoticImageEncryption"
+    "ChaoticImageEncryption",
 ]

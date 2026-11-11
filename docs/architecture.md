@@ -3,7 +3,7 @@
 ## 1. System Overview
 The Blockchain-Assisted Secure Image Encryption system is an enterprise-grade platform designed to guarantee confidential storage, decentralized availability, and verifiable integrity for digital imagery. 
 
-By combining symmetric authenticated encryption (AES-256-GCM), cryptographic content addressing (SHA-256 and IPFS), and immutable smart contract registries on Ethereum, the platform ensures that:
+By combining symmetric authenticated encryption (`AES-256-GCM`, hardened `Chaotic-Tent-Map`, and `Hybrid-Chaotic-AES`), cryptographic content addressing (SHA-256 and IPFS), and immutable smart contract registries on Ethereum, the platform ensures that:
 - Images are encrypted before egress from the user environment.
 - Encrypted payloads are permanently decoupled from centralized servers via IPFS.
 - Ownership, access control lists (ACL), and payload digest fingerprints are immutably anchored on-chain.
@@ -27,8 +27,8 @@ By combining symmetric authenticated encryption (AES-256-GCM), cryptographic con
          v                     v                    v                v
 +------------------+  +-----------------+  +-----------------+  +-----------------+
 |  Security & ACL  |  |  Cryptography   |  |     Storage     |  |   Blockchain    |
-|   (Signature     |  |  (AES-256-GCM,  |  |  (IPFS Kubo API |  |   (Web3.py &    |
-|  Verification)   |  |   SHA-256 Hash) |  |   & Gateways)   |  | ImageRegistry)  |
+|   (Signature     |  |  (AES-256-GCM / |  |  (IPFS Kubo API |  |   (Web3.py &    |
+|  Verification)   |  |  Chaotic / SHA) |  |   & Gateways)   |  | ImageRegistry)  |
 +------------------+  +-----------------+  +-----------------+  +-----------------+
                                                                          |
                                                                          v
@@ -39,11 +39,13 @@ By combining symmetric authenticated encryption (AES-256-GCM), cryptographic con
 ```
 
 ### 2.1 Encryption Layer
-- **Algorithm**: Advanced Encryption Standard in Galois/Counter Mode (AES-256-GCM).
-- **Security Properties**: Confidentiality, integrity, and authenticity in a single cryptographic primitive.
-- **Key Derivation & Generation**: 256-bit cryptographically secure pseudorandom keys generated via CSPRNG (`os.urandom`).
-- **Initialization Vector**: Unique 96-bit (12-byte) nonce generated per encryption cycle. Nonce reuse is strictly prohibited.
-- **Integrity Tag**: 128-bit authentication tag calculated over ciphertext and verified during decryption.
+- **Supported Algorithms**:
+  - **`AES-256-GCM` (Default)**: OpenSSL-backed Advanced Encryption Standard in Galois/Counter Mode per NIST SP 800-38D.
+  - **`Chaotic-Tent-Map`**: Lossless 3-stage chaotic cipher combining Sine Map spatial permutation ($\mu \in [0.87, 0.999]$), Prime Circulant S-box substitution, and a vectorized 256-lane Skewed Tent Map with bidirectional avalanche diffusion and HMAC-SHA256 authentication.
+  - **`Hybrid-Chaotic-AES`**: Defense-in-depth composition applying the 3-stage chaotic confusion/diffusion layer with domain-separated subkeys followed by AES-256-GCM authenticated encryption.
+- **Key Derivation & Generation**: 256-bit cryptographically secure pseudorandom keys generated via `secrets.token_bytes`, with per-encryption subkeys derived via HMAC-SHA256 over `(key, nonce)`.
+- **Initialization Vector**: Fresh 96-bit (12-byte) CSPRNG nonce (`os.urandom(12)`) generated per encryption cycle across all modes. Nonce reuse is strictly prohibited.
+- **Integrity Tag**: 128-bit authentication tag (GCM or Encrypt-then-MAC HMAC-SHA256) verifying ciphertext, nonce, and optional associated data before releasing decrypted bytes.
 
 ### 2.2 Hashing Layer
 - **Algorithm**: Secure Hash Algorithm 256-bit (SHA-256).

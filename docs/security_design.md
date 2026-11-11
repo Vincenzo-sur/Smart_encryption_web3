@@ -14,13 +14,21 @@ The security architecture addresses threats targeting data confidentiality, inte
 
 ## 2. Cryptographic Primitive Selection
 
-### 2.1 AES-256-GCM (Authenticated Encryption with Associated Data)
+### 2.1 AES-256-GCM (Default AEAD Transport Cipher)
 - **Choice Justification**: Unlike unauthenticated modes such as CBC or CTR which are vulnerable to bit-flipping and padding oracle attacks, Galois/Counter Mode (GCM) combines CTR encryption with Galois field polynomial authentication.
 - **Key Size**: 256 bits (32 bytes), providing defense against quantum brute-force searches (Grover's algorithm safety margin).
-- **Nonce Requirement**: Exactly 96 bits (12 bytes) per encryption. Every encryption operation invokes a cryptographically secure random number generator (`os.urandom(12)`). Nonce reuse across identical keys breaks GCM security; our pipeline enforces fresh nonce generation per image.
-- **Authentication Tag**: 128 bits (16 bytes). Verifies ciphertext integrity and authenticity simultaneously.
+- **Nonce Requirement**: Exactly 96 bits (12 bytes) per encryption. Every encryption operation invokes a cryptographically secure random number generator (`os.urandom(12)`). Nonce reuse across identical keys is strictly prohibited.
+- **Authentication Tag**: 128 bits (16 bytes). Verifies ciphertext integrity, nonce binding, and associated data simultaneously.
 
-### 2.2 SHA-256 Content Attestation
+### 2.2 Hardened Chaotic-Tent-Map & Hybrid-Chaotic-AES Modes
+- **Three-Stage Chaotic Pipeline**:
+  1. **Sine Map Permutation**: Bounds control parameter $\mu \in [0.87, 0.999]$ with burn-in iterations to prevent out-of-range divergence.
+  2. **Prime Circulant Substitution**: Constructs a bijective 256-entry S-box via coprime affine strides and keyed Fisher-Yates mixing.
+  3. **Vectorized Skewed Tent Map Diffusion**: Uses 256 parallel lanes with $p \neq 0.5$ and periodic perturbation (avoiding binary64 shift-out collapse) followed by bidirectional modular-addition and prefix-XOR chaining for full-buffer avalanche sensitivity.
+- **Encrypt-then-MAC & Domain Separation**: Per-encryption encryption and authentication subkeys are derived from `(master_key, nonce)` via HMAC-SHA256. Chaotic mode authenticates `(nonce, associated_data, ciphertext)` in constant time (`hmac.compare_digest`), while `Hybrid-Chaotic-AES` wraps the chaotic output inside AES-256-GCM.
+- **Lossless Binary Invariant**: Operates directly on raw byte streams so PNG, RGBA, JPEG, and WebP payloads recover bit-for-bit without image container leaks on IPFS.
+
+### 2.3 SHA-256 Content Attestation
 - Cryptographically strong one-way hash computed over the encrypted payload.
 - Serves as the primary immutable identifier anchored on the blockchain ledger (`bytes32`).
 

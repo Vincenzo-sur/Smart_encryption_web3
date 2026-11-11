@@ -9,7 +9,13 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Re
 from fastapi.responses import JSONResponse
 
 from encryption.key_manager import generate_encryption_key, key_to_hex, hex_to_key
-from encryption.encrypt import encrypt_image, EncryptionResult, EncryptionError
+from encryption.encrypt import (
+    encrypt_image,
+    EncryptionResult,
+    EncryptionError,
+    ALGORITHM_AES_GCM,
+    SUPPORTED_ALGORITHMS,
+)
 from encryption.decrypt import decrypt_image, AuthenticationError, DecryptionError
 from hashing.hash_utils import calculate_hash
 from storage.ipfs_service import IPFSService, IPFSConnectionError, StorageError
@@ -60,14 +66,21 @@ async def upload_image(
     owner_address: str = Form(...),
     signature: Optional[str] = Form(None),
     challenge: Optional[str] = Form(None),
-    key_hex: Optional[str] = Form(None)
+    key_hex: Optional[str] = Form(None),
+    algorithm: str = Form(ALGORITHM_AES_GCM)
 ):
     """
-    Encrypts an uploaded image with AES-256-GCM, calculates its SHA-256 digest,
-    uploads ciphertext to IPFS, and registers the hash on the blockchain ledger.
+    Encrypts an uploaded image using the selected cipher algorithm, calculates its
+    SHA-256 digest, uploads ciphertext to IPFS, and registers the hash on-chain.
     """
     if not owner_address:
         raise HTTPException(status_code=400, detail="owner_address is required")
+
+    if algorithm not in SUPPORTED_ALGORITHMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported algorithm '{algorithm}'. Supported: {SUPPORTED_ALGORITHMS}"
+        )
 
     # Verify signature if challenge was provided
     if signature and challenge:
@@ -92,8 +105,8 @@ async def upload_image(
 
     # Encrypt raw image bytes
     try:
-        enc_result: EncryptionResult = encrypt_image(image_bytes, key)
-    except EncryptionError as exc:
+        enc_result: EncryptionResult = encrypt_image(image_bytes, key, algorithm=algorithm)
+    except (EncryptionError, ValueError) as exc:
         raise HTTPException(status_code=500, detail=f"Encryption failed: {exc}")
 
     # Calculate SHA-256 digest of ciphertext
@@ -140,6 +153,7 @@ async def upload_image(
         "owner": owner_address,
         "image_hash": clean_hash,
         "ipfs_cid": ipfs_cid,
+        "algorithm": enc_result.algorithm,
         "nonce": enc_result.nonce.hex(),
         "tag": enc_result.tag.hex(),
         "key_id": enc_result.key_id
@@ -284,13 +298,21 @@ async def decrypt_image_endpoint(image_id: str, request: DecryptRequest):
     if not ciphertext_bytes:
         raise HTTPException(status_code=404, detail="Ciphertext payload not found")
 
+    resolved_algorithm = request.algorithm or (cached.get("algorithm") if cached else None) or ALGORITHM_AES_GCM
+    if resolved_algorithm not in SUPPORTED_ALGORITHMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported algorithm '{resolved_algorithm}'. Supported: {SUPPORTED_ALGORITHMS}"
+        )
+
     # Authenticate and decrypt
     try:
         decrypted_bytes = decrypt_image(
             ciphertext=ciphertext_bytes,
             key=key,
             nonce=nonce,
-            tag=tag
+            tag=tag,
+            algorithm=resolved_algorithm
         )
         return Response(content=decrypted_bytes, media_type="image/png")
     except AuthenticationError as exc:
@@ -298,6 +320,8 @@ async def decrypt_image_endpoint(image_id: str, request: DecryptRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Decryption authentication failed: {exc}"
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except DecryptionError as exc:
         raise HTTPException(status_code=500, detail=f"Decryption runtime error: {exc}")
 

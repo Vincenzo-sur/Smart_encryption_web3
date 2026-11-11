@@ -40,8 +40,8 @@ This document outlines the end-to-end data pipelines for image encryption, block
 
 ### Detailed Sequence
 1. **User Initiation**: The user selects an image file via the Streamlit interface and connects their Ethereum wallet address.
-2. **Key Generation**: A 256-bit AES key is generated via `os.urandom`.
-3. **Authenticated Encryption**: `encrypt_image()` executes AES-256-GCM over the image bytes, yielding the encrypted payload, a distinct 12-byte nonce, and an authentication tag.
+2. **Key Generation**: A 256-bit symmetric key is generated via `secrets.token_bytes`.
+3. **Authenticated Encryption**: `encrypt_image()` executes the selected cipher (`AES-256-GCM`, `Chaotic-Tent-Map`, or `Hybrid-Chaotic-AES`) over the raw image bytes, yielding the encrypted payload, a distinct 12-byte CSPRNG nonce, and a 16-byte authentication tag.
 4. **Digest Generation**: `calculate_hash()` computes the SHA-256 hex digest directly over the encrypted bytes.
 5. **Decentralized Storage**: The encrypted payload is uploaded to IPFS via `upload_to_ipfs()`. IPFS returns a deterministic Content Identifier (CID).
 6. **On-Chain Attestation**: `register_image()` invokes the smart contract `registerImage(imageHash, ipfsCid)` function, anchoring the SHA-256 digest and CID under the owner's address.
@@ -86,4 +86,4 @@ This document outlines the end-to-end data pipelines for image encryption, block
 ### Integrity & Security Invariants
 - **Pre-Decryption Integrity Check**: Decryption is never attempted if the recalculated SHA-256 hash of the retrieved IPFS bytes fails to match the on-chain recorded hash.
 - **Access Control Enforcement**: If `hasAccess(requester, imageId)` returns `false` on the smart contract, the backend immediately halts and raises HTTP 403 Forbidden without exposing ciphertext or key data.
-- **Cryptographic Authentication**: Even if an unauthorized party bypasses intermediate checks, AES-256-GCM authentication tag verification will fail if any byte of the ciphertext, tag, or key is invalid.
+- **Cryptographic Authentication**: Even if an unauthorized party bypasses intermediate checks, AEAD/HMAC authentication tag verification will fail if any byte of the ciphertext, tag, nonce, associated data, or key is invalid.
