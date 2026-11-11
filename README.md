@@ -55,7 +55,6 @@ By combining symmetric authenticated encryption (AES-256-GCM), decentralized con
 │   ├── architecture.md       # Layered system architecture
 │   ├── data_flow.md          # End-to-end data pipelines
 │   ├── module_interfaces.md  # Standard typing and module contracts
-│   ├── reviewer_summary.md   # Member task-wise features & dated changelogs
 │   ├── security_design.md    # Cryptographic threat models & EIP-191 verification
 │   ├── setup.md              # Detailed local development guide
 │   └── team_status.md        # Engineering team sprint tracking board
@@ -115,8 +114,7 @@ python -m pytest tests/ -v
 ---
 
 ## Reviewer & Technical Documentation
-Detailed specifications, architectural decisions, and dated team progress can be found in `docs/`:
-- **[Reviewer Technical Summary](docs/reviewer_summary.md)**: Member task-wise features and dated changelogs.
+Detailed specifications, architectural decisions, and module contracts can be found in `docs/`:
 - **[System Architecture](docs/architecture.md)**: Cryptographic and distributed network blueprint.
 - **[Module Interfaces](docs/module_interfaces.md)**: Exact parameter types, return signatures, and exception hierarchy.
 - **[Security Design](docs/security_design.md)**: Threat modeling, EIP-191 wallet challenge-response protocol.
