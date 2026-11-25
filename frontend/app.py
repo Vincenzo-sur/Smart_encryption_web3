@@ -18,10 +18,41 @@ st.set_page_config(
 BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://127.0.0.1:8000")
 
 
+@st.cache_resource
+def start_embedded_backend_if_needed():
+    """Starts FastAPI in a background daemon thread if not already running (for standalone cloud deployments)."""
+    try:
+        r = requests.get(f"{BACKEND_API_URL}/health", timeout=1.5)
+        if r.status_code == 200:
+            return True
+    except Exception:
+        pass
+
+    try:
+        import threading
+        import time
+        import uvicorn
+        from backend.main import app as fastapi_app
+
+        thread = threading.Thread(
+            target=lambda: uvicorn.run(fastapi_app, host="127.0.0.1", port=8000, log_level="warning"),
+            daemon=True
+        )
+        thread.start()
+        time.sleep(2.0)
+        return True
+    except Exception:
+        return False
+
+
+start_embedded_backend_if_needed()
+
+
+@st.cache_data(ttl=3, show_spinner=False)
 def check_backend_health():
     """Checks the health of the FastAPI backend service."""
     try:
-        resp = requests.get(f"{BACKEND_API_URL}/health", timeout=2)
+        resp = requests.get(f"{BACKEND_API_URL}/health", timeout=6)
         if resp.status_code == 200:
             return resp.json()
     except Exception:

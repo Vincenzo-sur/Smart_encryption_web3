@@ -145,7 +145,7 @@ class BlockchainService:
         abi: Optional[list] = None
     ):
         self.rpc_url = rpc_url or os.getenv("BLOCKCHAIN_RPC_URL", "http://127.0.0.1:8545")
-        self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
+        self.w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": 0.8}))
         self.contract_address = contract_address or os.getenv("IMAGE_REGISTRY_CONTRACT_ADDRESS")
         self.abi = abi or IMAGE_REGISTRY_ABI
         self.contract = None

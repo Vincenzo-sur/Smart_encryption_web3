@@ -60,7 +60,7 @@ class IPFSService:
         """
         try:
             url = f"{self.api_url}/version"
-            resp = requests.post(url, auth=self._auth, timeout=3)
+            resp = requests.post(url, auth=self._auth, timeout=0.8)
             return resp.status_code == 200
         except Exception:
             return False
