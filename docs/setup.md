@@ -69,14 +69,18 @@ For unit testing and automated CI, tests use Ethereum Tester Provider or automat
 
 ## 5. Starting the Application Services
 
-### 5.1 Run FastAPI Backend
+### 5.0 Live Cloud Deployment (No Setup Required)
+The web application is live and hosted 24/7 on Streamlit Community Cloud:
+- **Live URL**: [https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/](https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/)
+
+### 5.1 Run FastAPI Backend Locally
 ```bash
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 - Swagger API Docs: `http://127.0.0.1:8000/docs`
 - Health Endpoint: `http://127.0.0.1:8000/health`
 
-### 5.2 Run Streamlit Frontend
+### 5.2 Run Streamlit Frontend Locally
 ```bash
 python -m streamlit run frontend/app.py
 ```

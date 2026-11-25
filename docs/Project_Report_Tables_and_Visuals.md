@@ -3,6 +3,8 @@
 
 This document compiles all tables, metrics, and figures mapped directly to your report sections.
 
+> 🌐 **Live Hosted Web Application**: [https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/](https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/)
+
 ---
 
 ### 📌 Table 1: Technologies and Tools Used

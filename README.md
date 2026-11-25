@@ -4,7 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.32%2B-FF4B4B.svg)](https://streamlit.io/)
-[![Solidity](https://img.shields.io/badge/Solidity-%5E0.8.20-363636.svg)](https://soliditylang.org/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/)
+
+> 🚀 **Live Hosted Web Application**: [https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/](https://smartencryptionweb3-mhbtweplhqfheouujeagnx.streamlit.app/)
 
 An enterprise-grade decentralized system designed to guarantee confidential storage, decentralized availability, and verifiable integrity for digital imagery.
 
