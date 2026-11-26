@@ -108,7 +108,12 @@ python -m streamlit run frontend/app.py
 ```
 - Dashboard UI: [http://localhost:8501](http://localhost:8501)
 
-### 4. Run Test Suites
+### 4. Cloud Deployment & Hosted Backend Options
+The live hosted web app supports two connection modes:
+1. **Embedded Zero-Config Backend (Default)**: Automatically runs the FastAPI backend engine inside a background thread on Streamlit Community Cloud.
+2. **Dedicated Cloud Backend (Render / Railway)**: Deploy the FastAPI service using the included `render.yaml` or `Procfile`, then point the frontend to your hosted URL via the sidebar **⚙️ Backend Connection Settings** or Streamlit Cloud Secrets (`BACKEND_API_URL = "https://your-backend.onrender.com"`).
+
+### 5. Run Test Suites
 ```bash
 python -m pytest tests/ -v
 ```
